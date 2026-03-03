@@ -1,69 +1,81 @@
 import cv2
-import mediapipe as mp
+import face_recognition
+import requests
 import time
+import threading
 
-class AdvancedFaceTracker:
-    def __init__(self, blur_faces=False):
-        """Initialize the deep learning face detection model."""
-        self.mp_face_detection = mp.solutions.face_detection
+class FullStackFaceTracker:
+    def __init__(self, known_image_path, person_name, server_url):
+        """Initialize the recognition model and server details."""
+        print(f"Loading biometric data for {person_name}...")
         
-        # model_selection=0 is optimized for short-range (webcam) 
-        # min_detection_confidence filters out false positives
-        self.detector = self.mp_face_detection.FaceDetection(
-            model_selection=0, min_detection_confidence=0.7
-        )
-        self.blur_faces = blur_faces
+        # Load your reference image and extract the facial map (encoding)
+        known_image = face_recognition.load_image_file(known_image_path)
+        self.known_encoding = face_recognition.face_encodings(known_image)[0]
+        self.known_name = person_name
+        
+        # Server config
+        self.server_url = server_url
+        self.last_sighting_time = 0
+        self.cooldown = 5.0  # Only ping the server once every 5 seconds per person
         self.prev_time = 0
 
+    def send_sighting_to_server(self, name):
+        """Sends the HTTP request in the background to avoid freezing the video."""
+        try:
+            requests.post(self.server_url, json={"name": name}, timeout=2)
+            print(f"[{time.strftime('%X')}] Successfully logged sighting of {name}")
+        except requests.exceptions.RequestException as e:
+            print(f"Server connection failed: {e}")
+
     def process_frame(self, frame):
-        """Processes a single frame for detection, HUD drawing, and manipulation."""
-        # OpenCV captures in BGR, but MediaPipe requires RGB color space
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = self.detector.process(rgb_frame)
+        """Processes a frame for recognition, HUD drawing, and server pinging."""
+        # Shrink the frame to 1/4 size for much faster AI processing
+        small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
+        rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
 
-        h, w, _ = frame.shape
+        # Find all faces and encodings in the current frame
+        face_locations = face_recognition.face_locations(rgb_small_frame)
+        face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
 
-        if results.detections:
-            for detection in results.detections:
-                # Extract normalized bounding box coordinates and scale them to frame size
-                bboxC = detection.location_data.relative_bounding_box
-                x = int(bboxC.xmin * w)
-                y = int(bboxC.ymin * h)
-                bw = int(bboxC.width * w)
-                bh = int(bboxC.height * h)
+        for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings):
+            # Scale the bounding box back up since we shrunk the image for the AI
+            top, right, bottom, left = top * 4, right * 4, bottom * 4, left * 4
+            
+            # See if the face matches our known encoding
+            matches = face_recognition.compare_faces([self.known_encoding], face_encoding, tolerance=0.6)
+            name = "Unknown Subject"
+            color = (0, 0, 255) # Red for unknown
 
-                # Clamp coordinates to ensure we don't try to draw outside the frame bounds
-                x, y = max(0, x), max(0, y)
-                bw, bh = min(w - x, bw), min(h - y, bh)
+            if True in matches:
+                name = self.known_name
+                color = (0, 255, 255) # Yellow/Cyan for known target
+                
+                # Check if enough time has passed to ping the server again
+                current_time = time.time()
+                if current_time - self.last_sighting_time > self.cooldown:
+                    self.last_sighting_time = current_time
+                    # Run the web request in a separate thread so the camera doesn't lag!
+                    threading.Thread(target=self.send_sighting_to_server, args=(name,)).start()
 
-                if self.blur_faces:
-                    # ROI Manipulation: Extract the face region and pixelate it
-                    roi = frame[y:y+bh, x:x+bw]
-                    if roi.shape[0] > 0 and roi.shape[1] > 0:
-                        # Shrink the face drastically, then blow it back up without smoothing (INTER_NEAREST)
-                        small = cv2.resize(roi, (12, 12), interpolation=cv2.INTER_LINEAR)
-                        pixelated = cv2.resize(small, (bw, bh), interpolation=cv2.INTER_NEAREST)
-                        frame[y:y+bh, x:x+bw] = pixelated
-                else:
-                    # Draw a custom HUD instead of a standard rectangle
-                    self._draw_hud(frame, x, y, bw, bh)
+            # Draw the sci-fi HUD brackets
+            self._draw_hud(frame, left, top, right - left, bottom - top, color)
+            
+            # Label the face
+            cv2.putText(frame, name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
-        # Calculate and render Frames Per Second (FPS)
+        # Calculate and render FPS
         curr_time = time.time()
         fps = int(1 / (curr_time - self.prev_time)) if self.prev_time else 0
         self.prev_time = curr_time
 
         cv2.putText(frame, f"FPS: {fps}", (15, 40), cv2.FONT_HERSHEY_DUPLEX, 0.8, (0, 255, 0), 2)
-        
-        # Display instructions
-        cv2.putText(frame, "Press 'b' to toggle blur | 'q' to quit", (15, h - 20), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
+        cv2.putText(frame, "Press 'q' to quit", (15, frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
         
         return frame
 
-    def _draw_hud(self, img, x, y, w, h):
-        """Draws sci-fi style corner brackets instead of a full square."""
-        color = (0, 255, 255)  # Cyan/Yellow
+    def _draw_hud(self, img, x, y, w, h, color):
+        """Draws sci-fi style corner brackets."""
         thickness = 3
         length = 25
 
@@ -81,29 +93,25 @@ class AdvancedFaceTracker:
         cv2.line(img, (x + w, y + h), (x + w, y + h - length), color, thickness)
 
 def main():
+    # SETUP: Put a picture of yourself in the same folder as this script
+    # and change 'my_face.jpg' and 'Your Name' below.
+    IMAGE_FILENAME = "my_face.jpg"
+    YOUR_NAME = "Your Name"
+    NODE_SERVER = "http://localhost:3000/api/sighting"
+
+    tracker = FullStackFaceTracker(IMAGE_FILENAME, YOUR_NAME, NODE_SERVER)
     cap = cv2.VideoCapture(0)
-    
-    # Instantiate our tracker
-    tracker = AdvancedFaceTracker(blur_faces=False)
 
     while cap.isOpened():
         success, frame = cap.read()
         if not success:
-            print("Failed to grab frame from camera. Exiting...")
             break
 
-        # Pass the frame through our custom class
         processed_frame = tracker.process_frame(frame)
+        cv2.imshow("AI Biometric Scanner", processed_frame)
 
-        cv2.imshow("Advanced Vision System", processed_frame)
-
-        # Keyboard listeners
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
+        if cv2.waitKey(1) & 0xFF == ord('q'):
             break
-        elif key == ord('b'):
-            # Dynamically toggle the pixelation effect
-            tracker.blur_faces = not tracker.blur_faces
 
     cap.release()
     cv2.destroyAllWindows()
