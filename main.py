@@ -1,50 +1,112 @@
 import cv2
+import mediapipe as mp
+import time
 
-# Load the pre-trained face classifier
-face_classifier = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-
-# Start video capture
-video_capture = cv2.VideoCapture(0)
-
-def detect_bounding_box(vid):
-    # Convert the frame to grayscale for face detection
-    gray_image = cv2.cvtColor(vid, cv2.COLOR_BGR2GRAY)
-    
-    # Detect faces in the frame
-    faces = face_classifier.detectMultiScale(
-        gray_image,
-        scaleFactor=1.1,  # Adjust this value to 1.05 for more accurate detections at the cost of speed
-        minNeighbors=5,   # Reduce this to 3 or 4 to detect more faces (but may increase false positives)
-        minSize=(30, 30)  # Adjust this value to detect smaller faces
-    )
-
-    
-    # Draw green squares around detected faces
-    for (x, y, w, h) in faces:
-        # Determine the side length of the square as the larger dimension
-        side_length = max(w, h)
+class AdvancedFaceTracker:
+    def __init__(self, blur_faces=False):
+        """Initialize the deep learning face detection model."""
+        self.mp_face_detection = mp.solutions.face_detection
         
-        # Draw a green square
-        cv2.rectangle(vid, (x, y), (x + side_length, y + side_length), (0, 255, 0), 2)
+        # model_selection=0 is optimized for short-range (webcam) 
+        # min_detection_confidence filters out false positives
+        self.detector = self.mp_face_detection.FaceDetection(
+            model_selection=0, min_detection_confidence=0.7
+        )
+        self.blur_faces = blur_faces
+        self.prev_time = 0
+
+    def process_frame(self, frame):
+        """Processes a single frame for detection, HUD drawing, and manipulation."""
+        # OpenCV captures in BGR, but MediaPipe requires RGB color space
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = self.detector.process(rgb_frame)
+
+        h, w, _ = frame.shape
+
+        if results.detections:
+            for detection in results.detections:
+                # Extract normalized bounding box coordinates and scale them to frame size
+                bboxC = detection.location_data.relative_bounding_box
+                x = int(bboxC.xmin * w)
+                y = int(bboxC.ymin * h)
+                bw = int(bboxC.width * w)
+                bh = int(bboxC.height * h)
+
+                # Clamp coordinates to ensure we don't try to draw outside the frame bounds
+                x, y = max(0, x), max(0, y)
+                bw, bh = min(w - x, bw), min(h - y, bh)
+
+                if self.blur_faces:
+                    # ROI Manipulation: Extract the face region and pixelate it
+                    roi = frame[y:y+bh, x:x+bw]
+                    if roi.shape[0] > 0 and roi.shape[1] > 0:
+                        # Shrink the face drastically, then blow it back up without smoothing (INTER_NEAREST)
+                        small = cv2.resize(roi, (12, 12), interpolation=cv2.INTER_LINEAR)
+                        pixelated = cv2.resize(small, (bw, bh), interpolation=cv2.INTER_NEAREST)
+                        frame[y:y+bh, x:x+bw] = pixelated
+                else:
+                    # Draw a custom HUD instead of a standard rectangle
+                    self._draw_hud(frame, x, y, bw, bh)
+
+        # Calculate and render Frames Per Second (FPS)
+        curr_time = time.time()
+        fps = int(1 / (curr_time - self.prev_time)) if self.prev_time else 0
+        self.prev_time = curr_time
+
+        cv2.putText(frame, f"FPS: {fps}", (15, 40), cv2.FONT_HERSHEY_DUPLEX, 0.8, (0, 255, 0), 2)
+        
+        # Display instructions
+        cv2.putText(frame, "Press 'b' to toggle blur | 'q' to quit", (15, h - 20), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
+        
+        return frame
+
+    def _draw_hud(self, img, x, y, w, h):
+        """Draws sci-fi style corner brackets instead of a full square."""
+        color = (0, 255, 255)  # Cyan/Yellow
+        thickness = 3
+        length = 25
+
+        # Top Left corner
+        cv2.line(img, (x, y), (x + length, y), color, thickness)
+        cv2.line(img, (x, y), (x, y + length), color, thickness)
+        # Top Right corner
+        cv2.line(img, (x + w, y), (x + w - length, y), color, thickness)
+        cv2.line(img, (x + w, y), (x + w, y + length), color, thickness)
+        # Bottom Left corner
+        cv2.line(img, (x, y + h), (x + length, y + h), color, thickness)
+        cv2.line(img, (x, y + h), (x, y + h - length), color, thickness)
+        # Bottom Right corner
+        cv2.line(img, (x + w, y + h), (x + w - length, y + h), color, thickness)
+        cv2.line(img, (x + w, y + h), (x + w, y + h - length), color, thickness)
+
+def main():
+    cap = cv2.VideoCapture(0)
     
-    return faces
+    # Instantiate our tracker
+    tracker = AdvancedFaceTracker(blur_faces=False)
 
-while True:
-    # Read frames from the video
-    result, video_frame = video_capture.read()
-    if result is False:
-        break  # Terminate the loop if the frame is not read successfully
+    while cap.isOpened():
+        success, frame = cap.read()
+        if not success:
+            print("Failed to grab frame from camera. Exiting...")
+            break
 
-    # Apply the face detection function to the video frame
-    faces = detect_bounding_box(video_frame)
+        # Pass the frame through our custom class
+        processed_frame = tracker.process_frame(frame)
 
-    # Display the processed frame in a window
-    cv2.imshow("open-cv", video_frame)
+        cv2.imshow("Advanced Vision System", processed_frame)
 
-    # Exit the loop when 'q' key is pressed
-    if cv2.waitKey(1) & 0xFF == ord("q"):
-        break
+        # Keyboard listeners
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('q'):
+            break
+        elif key == ord('b'):
+            # Dynamically toggle the pixelation effect
+            tracker.blur_faces = not tracker.blur_faces
 
-# Release the video capture object and close all OpenCV windows
-video_capture.release()
-cv2.destroyAllWindows()
+    cap.release()
+    cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()
