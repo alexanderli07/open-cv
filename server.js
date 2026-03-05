@@ -16,9 +16,8 @@ app.use(express.json());
 
 const JWT_SECRET = "super_secret_ai_key_change_this_later";
 
-// ==========================================
+
 // 1. SQL DATABASE SETUP (Users & Auth)
-// ==========================================
 const sqlDb = new sqlite3.Database('./users.db');
 
 sqlDb.serialize(() => {
@@ -30,9 +29,7 @@ sqlDb.serialize(() => {
     )`);
 });
 
-// ==========================================
 // 2. MONGODB SETUP (Face Sightings Logs)
-// ==========================================
 // Make sure MongoDB is running locally, or replace with a MongoDB Atlas URI
 mongoose.connect('mongodb://127.0.0.1:27017/ai_tracker')
     .then(() => console.log('Connected to MongoDB (Sightings Database)'))
@@ -45,9 +42,8 @@ const sightingSchema = new mongoose.Schema({
 });
 const Sighting = mongoose.model('Sighting', sightingSchema);
 
-// ==========================================
+
 // 3. AUTHENTICATION ROUTES (Using SQL)
-// ==========================================
 app.post('/register', async (req, res) => {
     const { username, password } = req.body;
     try {
@@ -87,9 +83,8 @@ const authenticateToken = (req, res, next) => {
     });
 };
 
-// ==========================================
+
 // 4. AI TRACKER API (Using MongoDB)
-// ==========================================
 // Python will hit this endpoint to log faces. (We can protect this with tokens later!)
 app.post('/api/sighting', async (req, res) => {
     const { name } = req.body;
