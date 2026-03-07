@@ -1,0 +1,128 @@
+/* Color Variables */
+:root {
+    --bg-deep: #0a0b10;
+    --card-bg: #14161f;
+    --accent-cyan: #00f2ff;
+    --accent-gold: #ffcc00;
+    --text-main: #ffffff;
+    --text-dim: #64748b;
+    --row-hover: rgba(255, 255, 255, 0.05);
+}
+
+/* Global Styles */
+body {
+    background-color: var(--bg-deep);
+    color: var(--text-main);
+    font-family: 'Inter', sans-serif;
+    letter-spacing: -0.01em;
+    min-height: 100vh;
+}
+
+/* Typography */
+h1 {
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 3px;
+    color: var(--accent-cyan);
+    text-shadow: 0 0 20px rgba(0, 242, 255, 0.2);
+}
+
+.status-label {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    letter-spacing: 1px;
+}
+
+/* Dashboard Card & Table */
+.dashboard-card {
+    background: var(--card-bg);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 12px;
+    padding: 2rem;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+}
+
+.table {
+    margin-bottom: 0;
+    border-collapse: separate;
+    border-spacing: 0 10px; /* Gap between rows */
+    background: transparent;
+}
+
+.table thead th {
+    color: var(--text-dim);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    border: none;
+    padding-bottom: 1rem;
+    letter-spacing: 1px;
+}
+
+.table tbody tr {
+    background-color: rgba(255, 255, 255, 0.02);
+    transition: transform 0.2s ease, background-color 0.2s ease;
+}
+
+.table tbody tr:hover {
+    background-color: var(--row-hover);
+    transform: translateX(5px);
+}
+
+.table td {
+    border: none;
+    padding: 1.25rem;
+    vertical-align: middle;
+    color: var(--text-main);
+}
+
+/* UI Elements */
+.subject-badge {
+    background: rgba(0, 242, 255, 0.08);
+    color: var(--accent-cyan);
+    border: 1px solid rgba(0, 242, 255, 0.2);
+    padding: 6px 14px;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+.count-text {
+    color: var(--accent-gold);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1.4rem;
+    font-weight: 700;
+}
+
+.unit-text {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin-left: 4px;
+}
+
+/* Live Status Animation */
+.status-dot {
+    height: 8px;
+    width: 8px;
+    background-color: #00ff88;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 6px;
+    box-shadow: 0 0 10px #00ff88;
+    animation: blink 2s infinite;
+}
+
+@keyframes blink {
+    0% { opacity: 1; }
+    50% { opacity: 0.4; }
+    100% { opacity: 1; }
+}
+
+.footer-info {
+    text-align: center;
+    font-size: 0.7rem;
+    color: var(--text-dim);
+}
+
+.text-cyan { color: var(--accent-cyan); }
