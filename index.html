@@ -1,57 +1,183 @@
 <!DOCTYPE html>
 <html lang="en">
-    
 <head>
     <meta charset="UTF-8">
-    <title>Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Face Recognition | Stealth Mode</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-deep: #0f111a;
+            --card-bg: #1a1d29;
+            --accent-cyan: #00f2ff;
+            --accent-gold: #ffcc00;
+            --text-dim: #94a3b8;
+        }
+
+        body {
+            background-color: var(--bg-deep);
+            color: #ffffff;
+            font-family: 'Inter', sans-serif;
+            letter-spacing: -0.02em;
+        }
+
+        /* Subtle Glow Header */
+        h1 {
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: var(--accent-cyan);
+            text-shadow: 0 0 15px rgba(0, 242, 255, 0.3);
+        }
+
+        /* Glassmorphism Card */
+        .dashboard-card {
+            background: var(--card-bg);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+        }
+
+        .table {
+            margin-bottom: 0;
+            border-collapse: separate;
+            border-spacing: 0 8px; /* Spacing between rows */
+        }
+
+        .table thead th {
+            background-color: transparent;
+            border: none;
+            color: var(--text-dim);
+            font-weight: 400;
+            text-transform: uppercase;
+            font-size: 0.8rem;
+            padding-left: 1.5rem;
+        }
+
+        .table tbody tr {
+            background-color: rgba(255, 255, 255, 0.03);
+            transition: all 0.2s ease;
+        }
+
+        .table tbody tr:hover {
+            background-color: rgba(255, 255, 255, 0.07);
+            transform: scale(1.01);
+        }
+
+        .table td {
+            border: none;
+            padding: 1.2rem 1.5rem;
+            vertical-align: middle;
+        }
+
+        .table td:first-child { border-radius: 8px 0 0 8px; }
+        .table td:last-child { border-radius: 0 8px 8px 0; }
+
+        /* Custom Badge */
+        .subject-badge {
+            background: rgba(0, 242, 255, 0.1);
+            color: var(--accent-cyan);
+            border: 1px solid rgba(0, 242, 255, 0.2);
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+        }
+
+        .count-text {
+            color: var(--accent-gold);
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 700;
+        }
+
+        /* Pulse animation for "Live" effect */
+        .status-dot {
+            height: 8px;
+            width: 8px;
+            background-color: #00ff88;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+            box-shadow: 0 0 8px #00ff88;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.3; }
+            100% { opacity: 1; }
+        }
+    </style>
 </head>
-<body class="bg-dark text-white">
-    <div class="container mt-5">
-        <h1 class="mb-4 text-center text-info">Face Recognition Dashboard</h1>
-        
-        <div class="row justify-content-center">
-            <div class="col-md-8">
-                <div class="card bg-secondary text-white">
-                    <div class="card-body">
-                        <table class="table table-dark table-hover mb-0">
-                            <thead>
-                                <tr>
-                                    <th>Subject Name</th>
-                                    <th>Times Spotted</th>
-                                </tr>
-                            </thead>
-                            <tbody id="tracker-table">
-                                <tr>
-                                    <td colspan="2" class="text-center">Waiting for camera data...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
+<body>
+
+<div class="container mt-5">
+    <div class="text-center mb-5">
+        <h1>Face Recognition</h1>
+        <p class="text-muted small">
+            <span class="status-dot"></span> LIVE SYSTEM MONITOR
+        </p>
+    </div>
+    
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <div class="dashboard-card p-4">
+                <table class="table text-white">
+                    <thead>
+                        <tr>
+                            <th>Subject Identity</th>
+                            <th class="text-end">Frequency</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tracker-table">
+                        <tr>
+                            <td colspan="2" class="text-center py-5 text-muted">
+                                <div class="spinner-border spinner-border-sm text-info me-2"></div>
+                                Awaiting incoming stream...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
             </div>
+            <p class="mt-4 text-center text-muted x-small" style="font-size: 0.75rem;">
+                Connected to Node.js Gateway: <span class="text-info">localhost:3000</span>
+            </p>
         </div>
     </div>
+</div>
 
-    <script src="http://localhost:3000/socket.io/socket.io.js"></script>
-    <script>
-        // Connect to the Node.js server
-        const socket = io('http://localhost:3000');
-        const tableBody = document.getElementById('tracker-table');
+<script src="http://localhost:3000/socket.io/socket.io.js"></script>
+<script>
+    const socket = io('http://localhost:3000');
+    const tableBody = document.getElementById('tracker-table');
 
-        // Listen for updates from the server
-        socket.on('dashboard_update', (data) => {
-            tableBody.innerHTML = ''; // Clear current table
-            
-            // Rebuild the table with the new counts
-            for (const [name, count] of Object.entries(data)) {
-                const row = `<tr>
-                                <td><span class="badge bg-primary fs-6">${name}</span></td>
-                                <td class="fs-5 fw-bold text-warning">${count}</td>
-                             </tr>`;
-                tableBody.innerHTML += row;
-            }
-        });
-    </script>
+    socket.on('dashboard_update', (data) => {
+        tableBody.innerHTML = '';
+        
+        const entries = Object.entries(data);
+        
+        if (entries.length === 0) {
+            tableBody.innerHTML = '<tr><td colspan="2" class="text-center py-5 text-muted">No detections recorded.</td></tr>';
+            return;
+        }
+
+        for (const [name, count] of entries) {
+            const row = `
+                <tr>
+                    <td>
+                        <span class="subject-badge">${name}</span>
+                    </td>
+                    <td class="text-end">
+                        <span class="count-text fs-5">${count}</span>
+                        <small class="text-muted ms-1">hits</small>
+                    </td>
+                </tr>`;
+            tableBody.innerHTML += row;
+        }
+    });
+</script>
+
 </body>
 </html>
