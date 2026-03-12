@@ -1,119 +1,206 @@
 import cv2
 import face_recognition
-import requests
+import os
 import time
-import threading
+import numpy as np
+import requests
+from concurrent.futures import ThreadPoolExecutor
+
 
 class FullStackFaceTracker:
-    def __init__(self, knownImagePath, personName, serverUrl):
-        """Initialize the recognition model and server details."""
-        print(f"Loading biometric data for {personName}...")
-        
-        # Load reference image and extract the facial map (encoding)
-        knownImage = face_recognition.load_image_file(knownImagePath)
-        self.knownEncoding = face_recognition.face_encodings(knownImage)[0]
-        self.knownName = personName
-        
-        # Server config
-        self.serverUrl = serverUrl
-        self.lastSightingTime = 0
-        self.cooldownPeriod = 5.0  # Seconds between server pings
-        self.prevTime = 0
 
-    def sendSightingToServer(self, name):
-        """Sends the HTTP request in the background to avoid freezing the video."""
+    def __init__(self, faceFolder, serverUrl):
+
+        print("Loading face database...")
+
+        self.knownEncodings = []
+        self.knownNames = []
+
+        self.loadFaceDatabase(faceFolder)
+
+        print(f"Loaded {len(self.knownNames)} known identities")
+
+        self.serverUrl = serverUrl
+        self.cooldownPeriod = 5
+        self.lastSighting = {}
+
+        self.executor = ThreadPoolExecutor(max_workers=4)
+
+        self.prevTime = 0
+        self.previousFrame = None
+
+        os.makedirs("sightings", exist_ok=True)
+
+    def loadFaceDatabase(self, folder):
+
+        for file in os.listdir(folder):
+
+            path = os.path.join(folder, file)
+
+            image = face_recognition.load_image_file(path)
+            encodings = face_recognition.face_encodings(image)
+
+            if len(encodings) > 0:
+
+                self.knownEncodings.append(encodings[0])
+                self.knownNames.append(os.path.splitext(file)[0])
+
+    def logEvent(self, name):
+
+        with open("sightings.log", "a") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {name}\n")
+
+    def saveFace(self, frame, name):
+
+        filename = f"sightings/{name}_{int(time.time())}.jpg"
+        cv2.imwrite(filename, frame)
+
+    def sendSighting(self, name, confidence):
+
         try:
-            requests.post(self.serverUrl, json={"name": name}, timeout=2)
-            print(f"[{time.strftime('%X')}] Successfully logged sighting of {name}")
-        except requests.exceptions.RequestException as e:
-            print(f"Server connection failed: {e}")
+
+            requests.post(
+                self.serverUrl,
+                json={
+                    "name": name,
+                    "confidence": float(confidence),
+                    "timestamp": time.time()
+                },
+                timeout=2
+            )
+
+            print(f"[{time.strftime('%X')}] Logged {name}")
+
+        except Exception as e:
+
+            print("Server connection failed:", e)
+
+    def drawHud(self, img, x, y, w, h, color):
+
+        length = 25
+        thickness = 3
+
+        cv2.line(img, (x, y), (x + length, y), color, thickness)
+        cv2.line(img, (x, y), (x, y + length), color, thickness)
+
+        cv2.line(img, (x + w, y), (x + w - length, y), color, thickness)
+        cv2.line(img, (x + w, y), (x + w, y + length), color, thickness)
+
+        cv2.line(img, (x, y + h), (x + length, y + h), color, thickness)
+        cv2.line(img, (x, y + h), (x, y + h - length), color, thickness)
+
+        cv2.line(img, (x + w, y + h), (x + w - length, y + h), color, thickness)
+        cv2.line(img, (x + w, y + h), (x + w, y + h - length), color, thickness)
 
     def processFrame(self, frame):
-        """Processes a frame for recognition, HUD drawing, and server pinging."""
-        # Shrink the frame to 1/4 size for much faster AI processing
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        if self.previousFrame is not None:
+
+            diff = cv2.absdiff(self.previousFrame, gray)
+            motion = diff.mean()
+
+            if motion < 2:
+                return frame
+
+        self.previousFrame = gray
+
         smallFrame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
         rgbSmallFrame = cv2.cvtColor(smallFrame, cv2.COLOR_BGR2RGB)
 
-        # Find all faces and encodings in the current frame
         faceLocations = face_recognition.face_locations(rgbSmallFrame)
         faceEncodings = face_recognition.face_encodings(rgbSmallFrame, faceLocations)
 
         for (top, right, bottom, left), faceEncoding in zip(faceLocations, faceEncodings):
-            # Scale the bounding box back up (since we processed at 0.25x)
-            top, right, bottom, left = top * 4, right * 4, bottom * 4, left * 4
-            
-            # See if the face matches our known encoding
-            matches = face_recognition.compare_faces([self.knownEncoding], faceEncoding, tolerance=0.6)
-            name = "Unknown Subject"
-            hudColor = (0, 0, 255) # Red for unknown
 
-            if True in matches:
-                name = self.knownName
-                hudColor = (0, 255, 255) # Yellow/Cyan for known target
-                
-                # Check if enough time has passed to ping the server again
-                currentTime = time.time()
-                if currentTime - self.lastSightingTime > self.cooldownPeriod:
-                    self.lastSightingTime = currentTime
-                    # Fire-and-forget thread for the API call
-                    threading.Thread(target=self.sendSightingToServer, args=(name,)).start()
+            top *= 4
+            right *= 4
+            bottom *= 4
+            left *= 4
 
-            # Draw the sci-fi HUD brackets
+            name = "Unknown"
+            confidence = 0
+            hudColor = (0, 0, 255)
+
+            if len(self.knownEncodings) > 0:
+
+                distances = face_recognition.face_distance(self.knownEncodings, faceEncoding)
+                bestMatch = np.argmin(distances)
+
+                confidence = 1 - distances[bestMatch]
+
+                if distances[bestMatch] < 0.6:
+
+                    name = self.knownNames[bestMatch]
+                    hudColor = (0, 255, 255)
+
+                    now = time.time()
+
+                    if name not in self.lastSighting or now - self.lastSighting[name] > self.cooldownPeriod:
+
+                        self.lastSighting[name] = now
+
+                        self.executor.submit(self.sendSighting, name, confidence)
+                        self.logEvent(name)
+                        self.saveFace(frame, name)
+
             self.drawHud(frame, left, top, right - left, bottom - top, hudColor)
-            
-            # Label the face
-            cv2.putText(frame, name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, hudColor, 2)
 
-        # Calculate and render FPS
+            cv2.putText(
+                frame,
+                f"{name} {confidence:.2f}",
+                (left, top - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                hudColor,
+                2
+            )
+
+        scanY = int(time.time() * 200) % frame.shape[0]
+
+        cv2.line(frame, (0, scanY), (frame.shape[1], scanY), (0, 255, 0), 1)
+
         currentTime = time.time()
+
         fps = int(1 / (currentTime - self.prevTime)) if self.prevTime else 0
+
         self.prevTime = currentTime
 
         cv2.putText(frame, f"FPS: {fps}", (15, 40), cv2.FONT_HERSHEY_DUPLEX, 0.8, (0, 255, 0), 2)
-        cv2.putText(frame, "Press 'q' to quit", (15, frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
-        
+
+        cv2.putText(frame, "Press 'q' to quit", (15, frame.shape[0] - 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
+
         return frame
 
-    def drawHud(self, img, x, y, w, h, color):
-        """Draws sci-fi style corner brackets."""
-        thickness = 3
-        length = 25
-
-        # Top Left
-        cv2.line(img, (x, y), (x + length, y), color, thickness)
-        cv2.line(img, (x, y), (x, y + length), color, thickness)
-        # Top Right
-        cv2.line(img, (x + w, y), (x + w - length, y), color, thickness)
-        cv2.line(img, (x + w, y), (x + w, y + length), color, thickness)
-        # Bottom Left
-        cv2.line(img, (x, y + h), (x + length, y + h), color, thickness)
-        cv2.line(img, (x, y + h), (x, y + h - length), color, thickness)
-        # Bottom Right
-        cv2.line(img, (x + w, y + h), (x + w - length, y + h), color, thickness)
-        cv2.line(img, (x + w, y + h), (x + w, y + h - length), color, thickness)
 
 def main():
-    # Configuration
-    imageFilename = "my_face.jpg"
-    userName = "Your Name"
-    nodeServerUrl = "http://localhost:3000/api/sighting"
 
-    tracker = FullStackFaceTracker(imageFilename, userName, nodeServerUrl)
-    videoCapture = cv2.VideoCapture(0)
+    faceFolder = "faces"
+    serverUrl = "http://localhost:3000/api/sighting"
 
-    while videoCapture.isOpened():
-        success, currentFrame = videoCapture.read()
+    tracker = FullStackFaceTracker(faceFolder, serverUrl)
+
+    video = cv2.VideoCapture(0)
+
+    while video.isOpened():
+
+        success, frame = video.read()
+
         if not success:
             break
 
-        processedFrame = tracker.processFrame(currentFrame)
-        cv2.imshow("AI Biometric Scanner", processedFrame)
+        frame = tracker.processFrame(frame)
 
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        cv2.imshow("AI Biometric Scanner", frame)
+
+        if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
-    videoCapture.release()
+    video.release()
     cv2.destroyAllWindows()
+
 
 if __name__ == "__main__":
     main()
