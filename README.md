@@ -1,4 +1,4 @@
-# 👁️ AI Face Recognition Real-Time Dashboard
+# 👁️ Open CV
 
 A sleek, high-performance monitoring interface designed to visualize face recognition data in real-time. This dashboard transforms raw detection events into an actionable "Command Center" view, prioritizing readability and modern "Stealth Mode" aesthetics.
 
