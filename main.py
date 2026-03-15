@@ -1,151 +1,155 @@
 import cv2
 import face_recognition
+import numpy as np
 import os
 import time
-import numpy as np
+import logging
 import requests
+import faiss
+from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 
+logging.basicConfig(level=logging.INFO)
 
-class FullStackFaceTracker:
+@dataclass
+class DetectionEvent:
+    name: str
+    confidence: float
+    timestamp: float
 
-    def __init__(self, faceFolder, serverUrl):
 
-        print("Loading face database...")
+class VisionSystem:
 
-        self.knownEncodings = []
-        self.knownNames = []
+    def __init__(self, face_folder, server_url):
 
-        self.loadFaceDatabase(faceFolder)
-
-        print(f"Loaded {len(self.knownNames)} known identities")
-
-        self.serverUrl = serverUrl
-        self.cooldownPeriod = 5
-        self.lastSighting = {}
-
+        self.server_url = server_url
         self.executor = ThreadPoolExecutor(max_workers=4)
 
-        self.prevTime = 0
-        self.previousFrame = None
+        self.prev_frame = None
+        self.prev_time = 0
+
+        self.cooldown = 5
+        self.last_seen = {}
+
+        self.known_names = []
+        self.encodings = []
+
+        self.load_database(face_folder)
+
+        self.init_vector_index()
 
         os.makedirs("sightings", exist_ok=True)
 
-    def loadFaceDatabase(self, folder):
+    def load_database(self, folder):
+
+        logging.info("Loading face database...")
 
         for file in os.listdir(folder):
 
             path = os.path.join(folder, file)
 
             image = face_recognition.load_image_file(path)
-            encodings = face_recognition.face_encodings(image)
+            encoding = face_recognition.face_encodings(image)
 
-            if len(encodings) > 0:
+            if encoding:
 
-                self.knownEncodings.append(encodings[0])
-                self.knownNames.append(os.path.splitext(file)[0])
+                self.encodings.append(encoding[0])
+                self.known_names.append(os.path.splitext(file)[0])
 
-    def logEvent(self, name):
+        logging.info(f"Loaded {len(self.known_names)} identities")
 
-        with open("sightings.log", "a") as f:
-            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {name}\n")
+    def init_vector_index(self):
 
-    def saveFace(self, frame, name):
+        dimension = 128
 
-        filename = f"sightings/{name}_{int(time.time())}.jpg"
-        cv2.imwrite(filename, frame)
+        self.index = faiss.IndexFlatL2(dimension)
 
-    def sendSighting(self, name, confidence):
+        if len(self.encodings) > 0:
+
+            vectors = np.array(self.encodings).astype("float32")
+
+            self.index.add(vectors)
+
+    def detect_motion(self, frame):
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        if self.prev_frame is None:
+            self.prev_frame = gray
+            return True
+
+        diff = cv2.absdiff(self.prev_frame, gray)
+        motion = diff.mean()
+
+        self.prev_frame = gray
+
+        return motion > 2
+
+    def match_face(self, encoding):
+
+        if len(self.encodings) == 0:
+            return "Unknown", 0
+
+        D, I = self.index.search(np.array([encoding]).astype("float32"), 1)
+
+        distance = D[0][0]
+        idx = I[0][0]
+
+        confidence = 1 - distance
+
+        if distance < 0.6:
+            return self.known_names[idx], confidence
+
+        return "Unknown", confidence
+
+    def send_event(self, event: DetectionEvent):
 
         try:
 
             requests.post(
-                self.serverUrl,
+                self.server_url,
                 json={
-                    "name": name,
-                    "confidence": float(confidence),
-                    "timestamp": time.time()
+                    "name": event.name,
+                    "confidence": event.confidence,
+                    "timestamp": event.timestamp
                 },
                 timeout=2
             )
 
-            print(f"[{time.strftime('%X')}] Logged {name}")
-
         except Exception as e:
 
-            print("Server connection failed:", e)
+            logging.warning("Server unreachable")
 
-    def drawHud(self, img, x, y, w, h, color):
+    def save_face(self, frame, name):
 
-        length = 25
-        thickness = 3
+        filename = f"sightings/{name}_{int(time.time())}.jpg"
+        cv2.imwrite(filename, frame)
 
-        cv2.line(img, (x, y), (x + length, y), color, thickness)
-        cv2.line(img, (x, y), (x, y + length), color, thickness)
+    def process_frame(self, frame):
 
-        cv2.line(img, (x + w, y), (x + w - length, y), color, thickness)
-        cv2.line(img, (x + w, y), (x + w, y + length), color, thickness)
+        start = time.perf_counter()
 
-        cv2.line(img, (x, y + h), (x + length, y + h), color, thickness)
-        cv2.line(img, (x, y + h), (x, y + h - length), color, thickness)
+        if not self.detect_motion(frame):
+            return frame
 
-        cv2.line(img, (x + w, y + h), (x + w - length, y + h), color, thickness)
-        cv2.line(img, (x + w, y + h), (x + w, y + h - length), color, thickness)
+        small = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
+        rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
 
-    def processFrame(self, frame):
+        locations = face_recognition.face_locations(rgb)
+        encodings = face_recognition.face_encodings(rgb, locations)
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        for (top, right, bottom, left), encoding in zip(locations, encodings):
 
-        if self.previousFrame is not None:
-
-            diff = cv2.absdiff(self.previousFrame, gray)
-            motion = diff.mean()
-
-            if motion < 2:
-                return frame
-
-        self.previousFrame = gray
-
-        smallFrame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
-        rgbSmallFrame = cv2.cvtColor(smallFrame, cv2.COLOR_BGR2RGB)
-
-        faceLocations = face_recognition.face_locations(rgbSmallFrame)
-        faceEncodings = face_recognition.face_encodings(rgbSmallFrame, faceLocations)
-
-        for (top, right, bottom, left), faceEncoding in zip(faceLocations, faceEncodings):
+            name, confidence = self.match_face(encoding)
 
             top *= 4
             right *= 4
             bottom *= 4
             left *= 4
 
-            name = "Unknown"
-            confidence = 0
-            hudColor = (0, 0, 255)
+            color = (0, 255, 255) if name != "Unknown" else (0, 0, 255)
 
-            if len(self.knownEncodings) > 0:
-
-                distances = face_recognition.face_distance(self.knownEncodings, faceEncoding)
-                bestMatch = np.argmin(distances)
-
-                confidence = 1 - distances[bestMatch]
-
-                if distances[bestMatch] < 0.6:
-
-                    name = self.knownNames[bestMatch]
-                    hudColor = (0, 255, 255)
-
-                    now = time.time()
-
-                    if name not in self.lastSighting or now - self.lastSighting[name] > self.cooldownPeriod:
-
-                        self.lastSighting[name] = now
-
-                        self.executor.submit(self.sendSighting, name, confidence)
-                        self.logEvent(name)
-                        self.saveFace(frame, name)
-
-            self.drawHud(frame, left, top, right - left, bottom - top, hudColor)
+            cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
 
             cv2.putText(
                 frame,
@@ -153,52 +157,62 @@ class FullStackFaceTracker:
                 (left, top - 10),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7,
-                hudColor,
+                color,
                 2
             )
 
-        scanY = int(time.time() * 200) % frame.shape[0]
+            now = time.time()
 
-        cv2.line(frame, (0, scanY), (frame.shape[1], scanY), (0, 255, 0), 1)
+            if name != "Unknown":
 
-        currentTime = time.time()
+                if name not in self.last_seen or now - self.last_seen[name] > self.cooldown:
 
-        fps = int(1 / (currentTime - self.prevTime)) if self.prevTime else 0
+                    self.last_seen[name] = now
 
-        self.prevTime = currentTime
+                    event = DetectionEvent(name, confidence, now)
 
-        cv2.putText(frame, f"FPS: {fps}", (15, 40), cv2.FONT_HERSHEY_DUPLEX, 0.8, (0, 255, 0), 2)
+                    self.executor.submit(self.send_event, event)
 
-        cv2.putText(frame, "Press 'q' to quit", (15, frame.shape[0] - 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
+                    self.save_face(frame, name)
+
+                    logging.info(f"Detected {name}")
+
+        latency = (time.perf_counter() - start) * 1000
+
+        now = time.time()
+        fps = int(1 / (now - self.prev_time)) if self.prev_time else 0
+        self.prev_time = now
+
+        cv2.putText(frame, f"FPS: {fps}", (10, 40), cv2.FONT_HERSHEY_DUPLEX, 0.8, (0,255,0),2)
+        cv2.putText(frame, f"Latency: {latency:.1f}ms", (10,70), cv2.FONT_HERSHEY_DUPLEX,0.6,(255,255,255),1)
 
         return frame
 
 
 def main():
 
-    faceFolder = "faces"
-    serverUrl = "http://localhost:3000/api/sighting"
+    tracker = VisionSystem(
+        face_folder="faces",
+        server_url="http://localhost:3000/api/sighting"
+    )
 
-    tracker = FullStackFaceTracker(faceFolder, serverUrl)
+    cam = cv2.VideoCapture(0)
 
-    video = cv2.VideoCapture(0)
+    while cam.isOpened():
 
-    while video.isOpened():
+        ret, frame = cam.read()
 
-        success, frame = video.read()
-
-        if not success:
+        if not ret:
             break
 
-        frame = tracker.processFrame(frame)
+        frame = tracker.process_frame(frame)
 
-        cv2.imshow("AI Biometric Scanner", frame)
+        cv2.imshow("AI Face Recognition System", frame)
 
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
-    video.release()
+    cam.release()
     cv2.destroyAllWindows()
 
 
