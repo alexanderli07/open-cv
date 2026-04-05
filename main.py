@@ -86,23 +86,19 @@ class VisionSystem:
             self.index.add(vectors)  # Add known faces to index
 
     def detect_motion(self, frame):
-
-        # Convert frame to grayscale for simpler comparison
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-        # First frame always counts as motion
+        gray = cv2.GaussianBlur(gray, (21, 21), 0) # Smooth out the noise
+        
         if self.prev_frame is None:
             self.prev_frame = gray
             return True
 
-        # Compute absolute difference between frames
         diff = cv2.absdiff(self.prev_frame, gray)
-        motion = diff.mean()
-
+        thresh = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)[1]
+        motion_sum = np.sum(thresh)
+        
         self.prev_frame = gray
-
-        # Threshold determines sensitivity of motion detection
-        return motion > 2
+        return motion_sum > 5000 # Trigger based on pixel count, not just mean
 
     def match_face(self, encoding):
 
